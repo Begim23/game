@@ -1,32 +1,318 @@
-# Prerequisites
-*.d
+#include <iostream>
+#include <vector>
+#include <cstdlib>
+#include <ctime>
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
+#include <SDL2/SDL_mixer.h>
+#include <SDL2/SDL_ttf.h>
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+// Load the bird asset
+SDL_Surface* birdSurface = SDL_LoadBMP("assets/bird.bmp");
+SDL_Texture* birdTexture = SDL_CreateTextureFromSurface(renderer, birdSurface);
+SDL_FreeSurface(birdSurface);
 
-# Precompiled Headers
-*.gch
-*.pch
+// Load the pipe assets
+SDL_Surface* pipeTopSurface = SDL_LoadBMP("assets/pipe_top.bmp");
+SDL_Texture* pipeTopTexture = SDL_CreateTextureFromSurface(renderer, pipeTopSurface);
+SDL_FreeSurface(pipeTopSurface);
 
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
+SDL_Surface* pipeBottomSurface = SDL_LoadBMP("assets/pipe_bottom.bmp");
+SDL_Texture* pipeBottomTexture = SDL_CreateTextureFromSurface(renderer, pipeBottomSurface);
+SDL_FreeSurface(pipeBottomSurface);
 
-# Fortran module files
-*.mod
-*.smod
+// Load the background asset
+SDL_Surface* backgroundSurface = SDL_LoadBMP("assets/background.bmp");
+SDL_Texture* backgroundTexture = SDL_CreateTextureFromSurface(renderer, backgroundSurface);
+SDL_FreeSurface(backgroundSurface);
 
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
+// Load the sounds
+Mix_Chunk* flapSound = Mix_LoadWAV("assets/audio/wing.wav");
+Mix_Chunk* scoreSound = Mix_LoadWAV("assets/audio/point.wav");
+Mix_Chunk* hitSound = Mix_LoadWAV("assets/audio/hit.wav");
 
-# Executables
-*.exe
-*.out
-*.app
+// Screen dimensions
+const int SCREEN_WIDTH = 288;
+const int SCREEN_HEIGHT = 512;
+
+// Game constants
+const int BIRD_WIDTH = 34;
+const int BIRD_HEIGHT = 24;
+const int PIPE_WIDTH = 52;
+const int PIPE_HEIGHT = 320;
+const int PIPE_GAP = 100;
+const int GROUND_HEIGHT = 112;
+const int GRAVITY = 600;
+const int JUMP_VELOCITY = -200;
+const int PIPE_SPEED = -200;
+const int FRAME_TIME = 1000 / 60;
+const int PIPE_SPAWN_TIME = 2000;
+const int SCORE_UPDATE_TIME = 1000;
+
+// Asset filenames
+const char* BACKGROUND_FILENAME = "assets/background.png";
+const char* BIRD_FILENAME = "assets/bird.png";
+const char* PIPE_FILENAME = "assets/pipe.png";
+const char* GROUND_FILENAME = "assets/ground.png";
+const char* FONT_FILENAME = "assets/FlappyBirdy.ttf";
+const char* SCORE_SOUND_FILENAME = "assets/sfx_point.wav";
+const char* FLAP_SOUND_FILENAME = "assets/sfx_flap.wav";
+const char* HIT_SOUND_FILENAME = "assets/sfx_hit.wav";
+const char* DIE_SOUND_FILENAME = "assets/sfx_die.wav";
+
+// Helper function to load an image file into a texture
+SDL_Texture* LoadTexture(SDL_Renderer* renderer, const char* filename) {
+    // Load the image file into a surface
+    SDL_Surface* surface = IMG_Load(filename);
+    if (!surface) {
+        std::cerr << "Failed to load image file " << filename << ": " << SDL_GetError() << std::endl;
+        return nullptr;
+    }
+
+    // Create a texture from the surface
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+    if (!texture) {
+        std::cerr << "Failed to create texture from " << filename << ": " << SDL_GetError() << std::endl;
+        SDL_FreeSurface(surface);
+        return nullptr;
+    }
+
+    // Free the surface and return the texture
+    SDL_FreeSurface(surface);
+    return texture;
+}
+
+// Helper function to load a font file into a font object
+TTF_Font* LoadFont(const char* filename, int size) {
+    // Load the font file into a font object
+    TTF_Font* font = TTF_OpenFont(filename, size);
+    if (!font) {
+        std::cerr << "Failed to load font file " << filename << ": " << TTF_GetError() << std::endl;
+        return nullptr;
+    }
+
+    return font;
+}
+
+// Helper function to play a sound effect
+void PlaySoundEffect(Mix_Chunk* sound) {
+    // Play the sound effect
+    Mix_PlayChannel(-1, sound, 0);
+}
+
+// Helper function to render a texture at a given position
+void RenderTexture(SDL_Renderer* renderer, SDL_Texture* texture, int x, int y, int width, int height) {
+    SDL_Rect rect = { x, y, width, height };
+    SDL_RenderCopy(renderer, texture, nullptr, &rect);
+}
+
+
+class Bird : public QObject, public QGraphicsPixmapItem {
+    Q_OBJECT
+    Q_PROPERTY(qreal rotation READ rotation WRITE setRotation)
+    Q_PROPERTY(qreal y READ y WRITE setY)
+public:
+    int x, y, width, height;
+    double velocity;
+    SDL_Texture* texture;
+
+    Bird(SDL_Renderer* renderer, int x, int y) {
+        this->x = x;
+        this->y = y;
+        this->width = 34;
+        this->height = 24;
+        this->velocity = 0.0;
+        this->texture = LoadTexture(renderer, "assets/bird.bmp");
+    }
+
+    void Jump() {
+        Mix_PlayChannel(-1, flapSound, 0);
+        this->velocity = -8.0;
+    }
+
+    void Update() {
+        this->y += (int)this->velocity;
+        this->velocity += 0.5;
+    }
+
+    void Render(SDL_Renderer* renderer) {
+        SDL_Rect birdRect = { this->x, this->y, this->width, this->height };
+        SDL_RenderCopy(renderer, this->texture, NULL, &birdRect);
+    }
+};
+
+class Pipe {
+public:
+    int x, topHeight, bottomHeight, gapSize;
+    SDL_Texture* topTexture;
+    SDL_Texture* bottomTexture;
+    bool passed;
+
+    Pipe(SDL_Renderer* renderer, int x) {
+        this->x = x;
+        this->topHeight = rand() % (SCREEN_HEIGHT / 2) + 50;
+        this->bottomHeight = SCREEN_HEIGHT - topHeight - GAP_SIZE;
+        this->gapSize = GAP_SIZE;
+        this->topTexture = LoadTexture(renderer, "assets/pipe_top.bmp");
+        this->bottomTexture = LoadTexture(renderer, "assets/pipe_bottom.bmp");
+        this->passed = false;
+    }
+
+    void Update() {
+        this->x -= PIPE_SPEED;
+    }
+};
+
+int main() {
+    // Initialize SDL, SDL_image, SDL_mixer, and SDL_ttf
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
+        printf("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
+        exit(EXIT_FAILURE);
+    }
+    if (IMG_Init(IMG_INIT_PNG) < 0) {
+        printf("SDL_image could not initialize! SDL_image Error: %s\n", IMG_GetError());
+        exit(EXIT_FAILURE);
+    }
+    if (Mix_OpenAudio(MIX_DEFAULT_FREQUENCY, MIX_DEFAULT_FORMAT, MIX_DEFAULT_CHANNELS, 1024) < 0) {
+        printf("SDL_mixer could not initialize! SDL_mixer Error: %s\n", Mix_GetError());
+        exit(EXIT_FAILURE);
+    }
+    if (TTF_Init() < 0) {
+        printf("SDL_ttf could not initialize! SDL_ttf Error: %s\n", TTF_GetError());
+        exit(EXIT_FAILURE);
+    }
+
+    // Create the window and renderer
+    SDL_Window* window = SDL_CreateWindow("Flappy Bird", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
+    if (window == NULL) {
+        printf("SDL could not create window! SDL_Error: %s\n", SDL_GetError());
+        exit(EXIT_FAILURE);
+    }
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    if (renderer == NULL) {
+        printf("SDL could not create renderer! SDL_Error: %s\n", SDL_GetError());
+        exit(EXIT_FAILURE);
+    }
+
+    // Set the game font
+    TTF_Font* font = TTF_OpenFont("assets/fonts/arial.ttf", 24);
+    if (font == NULL) {
+        printf("SDL_ttf could not open font! SDL_ttf Error: %s\n", TTF_GetError());
+        exit(EXIT_FAILURE);
+    }
+
+    // Load the game assets and initialize the game objects
+    LoadAssets(renderer);
+    InitGameObjects(renderer);
+
+    // Set up the game loop
+    bool running = true;
+    Uint32 lastUpdate = SDL_GetTicks();
+    Uint32 lastPipeSpawn = SDL_GetTicks();
+    Uint32 lastScoreUpdate = SDL_GetTicks();
+    Uint32 lastFPSUpdate = SDL_GetTicks();
+    int frameCount = 0;
+    int score = 0;
+    int highScore = LoadHighScore();
+    bool paused = true;
+    bool gameOver = false;
+    Bird* bird = new Bird(renderer, 50, SCREEN_HEIGHT / 2);
+    vector<Pipe*> pipes;
+    
+    while (running) {
+        // Calculate the time since the last update
+        Uint32 currentTicks = SDL_GetTicks();
+        Uint32 delta = currentTicks - lastUpdate;
+
+        // Handle events
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_QUIT) {
+                running = false;
+            } else if (e.type == SDL_KEYDOWN) {
+                if (e.key.keysym.sym == SDLK_SPACE) {
+                    if (gameOver) {
+                        RestartGame(renderer, &bird, &pipes, &score, &paused, &gameOver);
+                    } else if (!paused) {
+                        bird->Jump();
+                    } else {
+                        paused = false;
+                    }
+                } else if (e.key.keysym.sym == SDLK_ESCAPE) {
+                    if (!gameOver) {
+                        paused = !paused;
+                    }
+                }
+            }
+        }
+
+        // Update the game
+        if (!paused) {
+            bird->Update();
+            UpdatePipes(renderer, &pipes, bird, &score, &highScore, &gameOver);
+            UpdateScore(renderer, font, score, highScore);
+        }
+        // Clear the screen and render the game
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_RenderClear(renderer);
+        RenderBackground(renderer);
+        bird->Render();
+        for (int i = 0; i < pipes.size(); i++) {
+            pipes[i]->Render();
+        }
+        RenderGround(renderer);
+        if (paused) {
+            RenderText(renderer, font, "PAUSED", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, 255, 255, 255, true);
+        } else if (gameOver) {
+            RenderText(renderer, font, "GAME OVER", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 24, 255, 255, 255, true);
+            RenderText(renderer, font, "PRESS SPACE TO RESTART", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 24, 255, 255, 255, true);
+        }
+        RenderScore(renderer, font, score, highScore);
+        SDL_RenderPresent(renderer);
+
+        // Update the frame count and FPS
+        frameCount++;
+        if (currentTicks - lastFPSUpdate >= 1000) {
+            printf("FPS: %d\n", frameCount);
+            frameCount = 0;
+            lastFPSUpdate = currentTicks;
+        }
+
+        // Delay the loop to achieve the desired frame rate
+        Uint32 elapsed = SDL_GetTicks() - currentTicks;
+        if (elapsed < FRAME_TIME) {
+            SDL_Delay(FRAME_TIME - elapsed);
+        }
+
+        // Save the high score if it was beaten
+        if (score > highScore) {
+            SaveHighScore(score);
+            highScore = score;
+        }
+
+        // Spawn new pipes at the appropriate intervals
+        if (!paused && !gameOver && currentTicks - lastPipeSpawn >= PIPE_SPAWN_TIME) {
+            SpawnPipes(renderer, &pipes);
+            lastPipeSpawn = currentTicks;
+        }
+
+        // Update the score at the appropriate interval
+        if (!paused && !gameOver && currentTicks - lastScoreUpdate >= SCORE_UPDATE_TIME) {
+            score++;
+            lastScoreUpdate = currentTicks;
+        }
+
+        // Update the last update time
+        lastUpdate = currentTicks;}
+    
+    // Clean up and quit SDL
+    CleanUp(renderer);
+    SDL_DestroyWindow(window);
+    Mix_Quit();
+    TTF_Quit();
+    IMG_Quit();
+    SDL_Quit();
+    
+    return 0;
+
+    }
